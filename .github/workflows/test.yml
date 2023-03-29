@@ -37,10 +37,12 @@ jobs:
           default: true
 
       - name: Install Dependencies
-        run: pip install pytest maturin
+        run: python3 -m pip install pytest maturin
 
-      - name: Build Yroom
-        run: maturin develop
+      - name: Build and install package
+        run: |
+              maturin build
+              python3 -m pip install ./target/wheels/*.whl
 
       - name: Run Tests
         run: pytest
