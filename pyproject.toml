@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=0.14,<0.15"]
+build-backend = "maturin"
+
+[project]
+name = "yroom"
+version = "0.0.1"
+requires-python = ">=3.7"
+description = "Yjs sync and awareness protocol handler for a non-editing client (e.g. server)"
+authors = [
+    { name = "Stefan Wehrmeyer", email = "mail@stefanwehrmeyer.com" }
+]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+readme = "README.md"
+homepage = "https://github.com/stefanw/yroom"
+repository = "https://github.com/stefanw/yroom"
+
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
