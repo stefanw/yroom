@@ -7,5 +7,6 @@ mod roomsync;
 fn yroom(_py: Python, m: &PyModule) -> PyResult<()> {
     pyo3_log::init();
     m.add_class::<roomsync::YRoomManager>()?;
+    m.add_class::<roomsync::YRoomMessage>()?;
     Ok(())
 }
