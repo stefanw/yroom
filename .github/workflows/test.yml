@@ -10,7 +10,7 @@ env:
 
 jobs:
   test:
-    name: Run Python tests on ${{ matrix.os }}
+    name: Run Python ${{ matrix.python-version }} tests on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
     strategy:
