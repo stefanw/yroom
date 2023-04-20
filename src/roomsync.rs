@@ -34,15 +34,17 @@ pub struct YRoomManager {
 
 impl YRoomManager {
     fn get_room_with_data(&mut self, room: &str, data: Vec<u8>) -> &mut YRoom {
-        self.rooms
-            .entry(room.to_string())
-            .or_insert_with(|| YRoom::new(Some(data)))
+        self.rooms.entry(room.to_string()).or_insert_with(|| {
+            log::info!("Creating new YRoom '{}' with data", room);
+            YRoom::new(Some(data))
+        })
     }
 
     fn get_room(&mut self, room: &str) -> &mut YRoom {
-        self.rooms
-            .entry(room.to_string())
-            .or_insert_with(|| YRoom::new(None))
+        self.rooms.entry(room.to_string()).or_insert_with(|| {
+            log::info!("Creating new YRoom '{}'", room);
+            YRoom::new(None)
+        })
     }
 }
 
@@ -196,7 +198,6 @@ pub struct YRoom {
 
 impl YRoom {
     fn new(update_vec: Option<Vec<u8>>) -> Self {
-        log::info!("Creating new YRoom");
         let mut awareness = Awareness::default();
         if let Some(update_vec) = update_vec {
             let update = Update::decode_v1(&update_vec);
@@ -256,7 +257,7 @@ impl YRoom {
                             let mut txn = self.awareness.doc_mut().transact_mut();
                             txn.apply_update(update);
                         }
-                        Err(e) => log::error!("Error decoding update: {}", e),
+                        Err(e) => log::error!("Error decoding sync step 2: {}", e),
                     }
                 }
                 Message::Sync(SyncMessage::Update(data)) => {
