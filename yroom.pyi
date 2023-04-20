@@ -1,4 +1,4 @@
-from typing import List
+from typing import Dict, List, Optional
 
 class YRoomMessage:
     """
@@ -53,4 +53,34 @@ class YRoomManager:
     def list_rooms(self) -> List[str]:
         """
         Return list all room names that are available.
+        """
+    def get_map(self, room: str, name: str) -> Optional[str]:
+        """
+        Return the named map from the doc of that room as a JSON string or
+        None if map or room does not exist.
+        """
+    def get_array(self, room: str, name: str) -> Optional[str]:
+        """
+        Return the named array from the doc of that room as a JSON string or
+        None if array or room does not exist.
+        """
+    def get_text(self, room: str, name: str) -> Optional[str]:
+        """
+        Return the named text from the doc of that room or
+        None if text or room does not exist.
+        """
+    def get_xml_element(self, room: str, name: str) -> Optional[str]:
+        """
+        Return the named xml element from the doc of that room as serialized string or
+        None if xml element or room does not exist.
+        """
+    def get_xml_text(self, room: str, name: str) -> Optional[str]:
+        """
+        Return the named xml text from the doc of that room as serialized string or
+        None if xml text or room does not exist.
+        """
+    def get_xml_fragment(self, room: str, name: str) -> Optional[str]:
+        """
+        Return the named xml fragment from the doc of that room as serialized string or
+        None if xml fragment or room does not exist.
         """

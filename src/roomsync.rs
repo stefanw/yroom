@@ -11,11 +11,12 @@ use y_sync::{
     sync::{Message, MessageReader, SyncMessage},
 };
 use yrs::{
+    types::ToJson,
     updates::{
         decoder::{Decode, DecoderV1},
         encoder::{Encode, Encoder, EncoderV1},
     },
-    ReadTxn, StateVector, Transact, Update,
+    GetString, ReadTxn, StateVector, Transact, Update,
 };
 
 #[pyclass]
@@ -99,6 +100,92 @@ impl YRoomManager {
 
     pub fn list_rooms(&self) -> Vec<String> {
         self.rooms.keys().cloned().collect()
+    }
+
+    pub fn get_map(&self, room: String, name: String) -> PyObject {
+        let yroom = self.rooms.get(&room);
+        match yroom {
+            Some(room) => {
+                let doc = room.awareness.doc();
+                let obj = doc.get_or_insert_map(&name);
+                let serialized = obj.to_json(&doc.transact());
+                let mut result = Default::default();
+                serialized.to_json(&mut result);
+                Python::with_gil(|py| result.to_object(py))
+            }
+            None => Python::with_gil(|py| py.None()),
+        }
+    }
+
+    pub fn get_array(&self, room: String, name: String) -> PyObject {
+        let yroom = self.rooms.get(&room);
+        match yroom {
+            Some(room) => {
+                let doc = room.awareness.doc();
+                let obj = doc.get_or_insert_array(&name);
+                let serialized = obj.to_json(&doc.transact());
+                let mut result = Default::default();
+                serialized.to_json(&mut result);
+                Python::with_gil(|py| result.to_object(py))
+            }
+            None => Python::with_gil(|py| py.None()),
+        }
+    }
+
+    pub fn get_text(&self, room: String, name: String) -> PyObject {
+        let yroom = self.rooms.get(&room);
+        match yroom {
+            Some(room) => {
+                let doc = room.awareness.doc();
+                let obj = doc.get_or_insert_text(&name);
+
+                let serialized = obj.get_string(&doc.transact());
+                Python::with_gil(|py| serialized.to_object(py))
+            }
+            None => Python::with_gil(|py| py.None()),
+        }
+    }
+
+    pub fn get_xml_element(&self, room: String, name: String) -> PyObject {
+        let yroom = self.rooms.get(&room);
+        match yroom {
+            Some(room) => {
+                let doc = room.awareness.doc();
+                let obj = doc.get_or_insert_xml_element(&name);
+
+                let serialized = obj.get_string(&doc.transact());
+                Python::with_gil(|py| serialized.to_object(py))
+            }
+            None => Python::with_gil(|py| py.None()),
+        }
+    }
+
+    pub fn get_xml_text(&self, room: String, name: String) -> PyObject {
+        let yroom = self.rooms.get(&room);
+        match yroom {
+            Some(room) => {
+                let doc = room.awareness.doc();
+                let obj = doc.get_or_insert_xml_text(&name);
+
+                let serialized = obj.get_string(&doc.transact());
+                Python::with_gil(|py| serialized.to_object(py))
+            }
+            None => Python::with_gil(|py| py.None()),
+        }
+    }
+
+    pub fn get_xml_fragment(&self, room: String, name: String) -> PyObject {
+        let yroom = self.rooms.get(&room);
+        match yroom {
+            Some(room) => {
+                let doc = room.awareness.doc();
+                let obj = doc.get_or_insert_xml_fragment(&name);
+
+                let serialized = obj.get_string(&doc.transact());
+                Python::with_gil(|py| serialized.to_object(py))
+            }
+            None => Python::with_gil(|py| py.None()),
+        }
     }
 }
 
