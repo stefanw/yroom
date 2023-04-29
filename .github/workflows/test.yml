@@ -37,7 +37,7 @@ jobs:
           default: true
 
       - name: Install Dependencies
-        run: python3 -m pip install pytest maturin
+        run: python3 -m pip install pytest y_py maturin
 
       - name: Build and install package
         run: |
