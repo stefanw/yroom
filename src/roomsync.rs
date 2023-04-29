@@ -3,9 +3,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use pyo3::{prelude::*, types::PyBytes};
+use pyo3::{
+    prelude::*,
+    types::{PyBytes, PyDict},
+};
 
-use lib0::decoding::Cursor;
+use lib0::{
+    decoding::{Cursor, Read},
+    encoding::Write,
+};
 use y_sync::{
     awareness::Awareness,
     sync::{Message, MessageReader, SyncMessage},
@@ -13,11 +19,175 @@ use y_sync::{
 use yrs::{
     types::ToJson,
     updates::{
-        decoder::{Decode, DecoderV1},
-        encoder::{Encode, Encoder, EncoderV1},
+        decoder::{Decode, DecoderV1, DecoderV2},
+        encoder::{Encode, Encoder, EncoderV1, EncoderV2},
     },
     GetString, ReadTxn, StateVector, Transact, Update,
 };
+
+#[derive(Clone, Default, Debug)]
+enum WireVersion {
+    #[default]
+    V1,
+    V2,
+}
+
+struct EncoderWrapper {
+    wire_version: WireVersion,
+    messages: Vec<Message>,
+    prefix: Option<String>,
+}
+
+impl EncoderWrapper {
+    fn new(wire_version: &WireVersion, prefix: Option<String>) -> Self {
+        EncoderWrapper {
+            wire_version: wire_version.clone(),
+            messages: Vec::default(),
+            prefix,
+        }
+    }
+    fn push(&mut self, message: Message) {
+        self.messages.push(message);
+    }
+    fn to_vec(&self) -> Vec<u8> {
+        match self.wire_version {
+            WireVersion::V1 => {
+                if self.messages.is_empty() {
+                    return Vec::new();
+                }
+                let mut encoder = EncoderV1::new();
+                if let Some(prefix) = &self.prefix {
+                    encoder.write_string(prefix);
+                }
+                self.messages.iter().for_each(|message| {
+                    message.encode(&mut encoder);
+                });
+                encoder.to_vec()
+            }
+            WireVersion::V2 => {
+                if self.messages.is_empty() {
+                    return Vec::new();
+                }
+                let mut encoder = EncoderV2::new();
+                if let Some(prefix) = &self.prefix {
+                    encoder.write_string(prefix);
+                }
+                self.messages.iter().for_each(|message| {
+                    message.encode(&mut encoder);
+                });
+                encoder.to_vec()
+            }
+        }
+    }
+}
+
+struct DecoderWrapper<'a> {
+    wire_version: WireVersion,
+    decoder_v1: Option<DecoderV1<'a>>,
+    decoder_v2: Option<DecoderV2<'a>>,
+    pub document_name: Option<String>,
+}
+
+impl<'a> DecoderWrapper<'a> {
+    fn new(
+        wire_version: &WireVersion,
+        cursor: Cursor<'a>,
+        name_prefixed: bool,
+    ) -> Result<Self, lib0::error::Error> {
+        let mut document_name = None;
+        match wire_version {
+            WireVersion::V1 => {
+                let mut decoder = DecoderV1::new(cursor);
+                if name_prefixed {
+                    document_name = Some(decoder.read_string()?.to_string());
+                }
+                Ok(DecoderWrapper {
+                    wire_version: wire_version.clone(),
+                    decoder_v1: Some(decoder),
+                    decoder_v2: None,
+                    document_name,
+                })
+            }
+            WireVersion::V2 => match DecoderV2::new(cursor) {
+                Ok(mut decoder) => {
+                    if name_prefixed {
+                        document_name = Some(decoder.read_string()?.to_string());
+                    }
+                    Ok(DecoderWrapper {
+                        wire_version: wire_version.clone(),
+                        decoder_v1: None,
+                        decoder_v2: Some(decoder),
+                        document_name,
+                    })
+                }
+                Err(err) => Err(err),
+            },
+        }
+    }
+}
+
+impl Iterator for DecoderWrapper<'_> {
+    type Item = Result<Message, lib0::error::Error>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.wire_version {
+            WireVersion::V1 => MessageReader::new(self.decoder_v1.as_mut().unwrap()).next(),
+            WireVersion::V2 => MessageReader::new(self.decoder_v2.as_mut().unwrap()).next(),
+        }
+    }
+}
+
+impl From<u8> for WireVersion {
+    fn from(version: u8) -> Self {
+        match version {
+            1 => WireVersion::V1,
+            2 => WireVersion::V2,
+            // TODO: make this more graceful
+            _ => panic!("Invalid encoder version"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct YRoomSettings {
+    pub wire_version: WireVersion,
+    pub name_prefixed: bool,
+    pub server_start_sync: bool,
+}
+
+impl Default for YRoomSettings {
+    fn default() -> Self {
+        YRoomSettings {
+            wire_version: WireVersion::V1,
+            name_prefixed: false,
+            server_start_sync: true,
+        }
+    }
+}
+
+impl FromPyObject<'_> for YRoomSettings {
+    fn extract(ob: &PyAny) -> PyResult<Self> {
+        let settings = ob.downcast::<PyDict>()?;
+
+        let wire_version: WireVersion = match settings.get_item("wire_version") {
+            Some(wire_version) => wire_version.extract::<u8>()?.into(),
+            None => WireVersion::V1,
+        };
+        let name_prefixed = match settings.get_item("name_prefixed") {
+            Some(name_prefixed) => name_prefixed.extract::<bool>()?,
+            None => false,
+        };
+        let server_start_sync = match settings.get_item("server_start_sync") {
+            Some(server_start_sync) => server_start_sync.extract::<bool>()?,
+            None => true,
+        };
+
+        Ok(YRoomSettings {
+            wire_version,
+            name_prefixed,
+            server_start_sync,
+        })
+    }
+}
 
 #[pyclass]
 pub struct YRoomMessage {
@@ -27,33 +197,94 @@ pub struct YRoomMessage {
     pub broadcast_payload: PyObject,
 }
 
+#[pymethods]
+impl YRoomMessage {
+    pub fn __str__(&self) -> String {
+        format!(
+            "YRoomMessage(payload: {}, broadcast_payload: {})",
+            self.payload, self.broadcast_payload
+        )
+    }
+
+    pub fn __repr__(&self) -> String {
+        self.__str__()
+    }
+}
+
 #[pyclass]
 pub struct YRoomManager {
     rooms: HashMap<String, YRoom>,
+    default_settings: YRoomSettings,
+    room_settings: Vec<(String, YRoomSettings)>,
 }
 
 impl YRoomManager {
+    fn new_with_settings(settings: &PyDict) -> Self {
+        let default_settings = match settings.get_item(DEFAULT_KEY) {
+            Some(default) => default.extract::<YRoomSettings>().unwrap(),
+            None => YRoomSettings::default(),
+        };
+        let mut room_settings = Vec::new();
+        for (key, value) in settings.iter() {
+            let key = key.extract::<String>().unwrap();
+            if key == DEFAULT_KEY {
+                continue;
+            }
+            room_settings.push((key, value.extract::<YRoomSettings>().unwrap()));
+        }
+
+        YRoomManager {
+            rooms: HashMap::new(),
+            default_settings,
+            room_settings,
+        }
+    }
+    fn new_with_default() -> Self {
+        YRoomManager {
+            rooms: HashMap::new(),
+            default_settings: YRoomSettings::default(),
+            room_settings: Vec::default(),
+        }
+    }
     fn get_room_with_data(&mut self, room: &str, data: Vec<u8>) -> &mut YRoom {
+        let settings = self.find_settings(room);
         self.rooms.entry(room.to_string()).or_insert_with(|| {
-            log::info!("Creating new YRoom '{}' with data", room);
-            YRoom::new(Some(data))
+            log::info!(
+                "Creating new YRoom '{}' with data and settings {:?}",
+                room,
+                settings
+            );
+            YRoom::new(settings, Some(data))
         })
     }
 
     fn get_room(&mut self, room: &str) -> &mut YRoom {
+        let settings = self.find_settings(room);
         self.rooms.entry(room.to_string()).or_insert_with(|| {
-            log::info!("Creating new YRoom '{}'", room);
-            YRoom::new(None)
+            log::info!("Creating new YRoom '{}' with settings {:?}", room, settings);
+            YRoom::new(settings, None)
         })
     }
+
+    fn find_settings(&self, room: &str) -> YRoomSettings {
+        for (prefix, config) in &self.room_settings {
+            if room.starts_with(prefix) {
+                return config.clone();
+            }
+        }
+        self.default_settings.clone()
+    }
 }
+
+const DEFAULT_KEY: &str = "default";
 
 #[pymethods]
 impl YRoomManager {
     #[new]
-    fn new() -> Self {
-        YRoomManager {
-            rooms: HashMap::new(),
+    fn new(settings: Option<&PyDict>) -> Self {
+        match settings {
+            Some(settings) => Self::new_with_settings(settings),
+            None => Self::new_with_default(),
         }
     }
 
@@ -194,10 +425,11 @@ impl YRoomManager {
 pub struct YRoom {
     awareness: Awareness,
     connections: Arc<Mutex<HashMap<u64, HashSet<u64>>>>,
+    settings: YRoomSettings,
 }
 
 impl YRoom {
-    fn new(update_vec: Option<Vec<u8>>) -> Self {
+    fn new(settings: YRoomSettings, update_vec: Option<Vec<u8>>) -> Self {
         let mut awareness = Awareness::default();
         if let Some(update_vec) = update_vec {
             let update = Update::decode_v1(&update_vec);
@@ -212,24 +444,28 @@ impl YRoom {
         YRoom {
             awareness,
             connections: Arc::new(Mutex::new(HashMap::new())),
+            settings,
         }
     }
 
-    pub fn connect(&mut self, conn_id: u64) -> YRoomMessage {
+    fn connect(&mut self, conn_id: u64) -> YRoomMessage {
         let connections = self.connections.lock();
         connections
             .unwrap()
             .entry(conn_id)
             .or_insert_with(HashSet::new);
 
-        let sv = self.awareness.doc().transact().state_vector();
-        let mut encoder = EncoderV1::new();
-        Message::Sync(SyncMessage::SyncStep1(sv)).encode(&mut encoder);
+        let mut encoder = EncoderWrapper::new(&self.settings.wire_version, None);
 
-        if let Ok(awareness_update) = self.awareness.update() {
-            Message::Awareness(awareness_update).encode(&mut encoder);
+        if self.settings.server_start_sync {
+            let sv = self.awareness.doc().transact().state_vector();
+            encoder.push(Message::Sync(SyncMessage::SyncStep1(sv)));
+            if !self.awareness.clients().is_empty() {
+                if let Ok(awareness_update) = self.awareness.update() {
+                    encoder.push(Message::Awareness(awareness_update));
+                }
+            }
         }
-
         let payload = encoder.to_vec();
         Python::with_gil(|py| YRoomMessage {
             payload: PyBytes::new(py, &payload).into(),
@@ -238,20 +474,50 @@ impl YRoom {
     }
 
     pub fn handle_message(&mut self, conn_id: u64, payload: Vec<u8>) -> YRoomMessage {
-        let mut sync_encoder = EncoderV1::new();
-        let mut update_encoder = EncoderV1::new();
-        let mut decoder = DecoderV1::new(Cursor::new(&payload));
-        let reader = MessageReader::new(&mut decoder);
-        reader.for_each(|message_result| match message_result {
+        log::debug!("message: {:?}", payload);
+        let cursor = Cursor::new(&payload);
+        let decoder = match DecoderWrapper::new(
+            &self.settings.wire_version,
+            cursor,
+            self.settings.name_prefixed,
+        ) {
+            Ok(decoder) => decoder,
+            Err(e) => {
+                log::error!("Error decoding message: {}", e);
+                // TODO: return error message
+                return Python::with_gil(|py| YRoomMessage {
+                    payload: PyBytes::new(py, &[]).into(),
+                    broadcast_payload: PyBytes::new(py, &[]).into(),
+                });
+            }
+        };
+
+        let mut sync_encoder =
+            EncoderWrapper::new(&self.settings.wire_version, decoder.document_name.clone());
+        let mut update_encoder =
+            EncoderWrapper::new(&self.settings.wire_version, decoder.document_name.clone());
+
+        decoder.for_each(|message_result| match message_result {
             Ok(message) => match message {
                 Message::Sync(SyncMessage::SyncStep1(sv)) => {
                     let txn = self.awareness.doc_mut().transact_mut();
-                    let data = txn.encode_diff_v1(&sv);
+                    let data = match self.settings.wire_version {
+                        WireVersion::V1 => txn.encode_diff_v1(&sv),
+                        WireVersion::V2 => {
+                            let mut enc = EncoderV2::new();
+                            txn.encode_diff(&sv, &mut enc);
+                            enc.to_vec()
+                        }
+                    };
+                    log::debug!("message: {:?}", data);
                     let message = Message::Sync(SyncMessage::SyncStep2(data));
-                    message.encode(&mut sync_encoder);
+                    sync_encoder.push(message);
                 }
                 Message::Sync(SyncMessage::SyncStep2(data)) => {
-                    let update = Update::decode_v1(&data);
+                    let update = match self.settings.wire_version {
+                        WireVersion::V1 => Update::decode_v1(&data),
+                        WireVersion::V2 => Update::decode_v2(&data),
+                    };
                     match update {
                         Ok(update) => {
                             let mut txn = self.awareness.doc_mut().transact_mut();
@@ -267,15 +533,19 @@ impl YRoom {
                             let mut txn = self.awareness.doc_mut().transact_mut();
                             txn.apply_update(update);
                             let message = Message::Sync(SyncMessage::Update(data));
-                            message.encode(&mut update_encoder);
+                            update_encoder.push(message)
                         }
                         Err(e) => log::error!("Error decoding update: {}", e),
                     }
                 }
-                Message::Auth(_) => {}
+                Message::Auth(_) => {
+                    // TODO: check this. Always reply with permission granted
+                    log::warn!("Auth message received. Replying with permission granted");
+                    sync_encoder.push(Message::Auth(None))
+                }
                 Message::AwarenessQuery => {
                     if let Ok(awareness_update) = self.awareness.update() {
-                        Message::Awareness(awareness_update).encode(&mut sync_encoder);
+                        sync_encoder.push(Message::Awareness(awareness_update))
                     }
                 }
                 Message::Awareness(awareness_update) => {
@@ -302,13 +572,16 @@ impl YRoom {
                         }
                     }
                     if let Ok(awareness_update) = self.awareness.update() {
-                        Message::Awareness(awareness_update).encode(&mut update_encoder);
+                        update_encoder.push(Message::Awareness(awareness_update))
                     }
                 }
-                Message::Custom(_, _) => {}
+                Message::Custom(custom_type, _) => {
+                    // FIXME: handle custom
+                    log::warn!("Unhandled custom message received. Type: {}", custom_type);
+                }
             },
-            _ => {
-                log::warn!("Unknown message from connection {}", conn_id);
+            Err(err) => {
+                log::warn!("Bad message from connection {}: {:?}", conn_id, err);
             }
         });
 
@@ -329,16 +602,20 @@ impl YRoom {
             }
             connections.remove(&conn_id);
         }
-        let mut encoder = EncoderV1::new();
+        // FIXME: Can't give possibly necessary name prefix on disconnect
+        let mut encoder = EncoderWrapper::new(&self.settings.wire_version, None);
         if let Ok(awareness_update) = self.awareness.update() {
-            Message::Awareness(awareness_update).encode(&mut encoder);
+            encoder.push(Message::Awareness(awareness_update));
         }
         encoder.to_vec()
     }
 
     pub fn serialize(&self) -> Vec<u8> {
         let txn = self.awareness.doc().transact();
-        txn.encode_state_as_update_v1(&StateVector::default())
+        match self.settings.wire_version {
+            WireVersion::V1 => txn.encode_state_as_update_v1(&StateVector::default()),
+            WireVersion::V2 => txn.encode_state_as_update_v2(&StateVector::default()),
+        }
     }
 
     pub fn is_alive(&self) -> bool {

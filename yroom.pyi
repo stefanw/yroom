@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TypedDict
 
 class YRoomMessage:
     """
@@ -11,7 +11,16 @@ class YRoomMessage:
     payload: bytes
     broadcast_payload: bytes
 
+class YRoomSettings(TypedDict):
+    wire_version: int  # The Yjs encoding/decoding version to use (1 or 2, default: 1)
+    name_prefixed: bool  # Whether to expect a prefix for wire messages (default: False)
+    server_start_sync: bool  # Whether to start sync on connect (default: True)
+
 class YRoomManager:
+    def __init__(self, settings: Optional[Dict[str, YRoomSettings]]) -> None:
+        """
+        Create a new YRoomManager with an optional settings dict.
+        """
     def connect(self, room: str, conn_id: int) -> YRoomMessage:
         """
         Connect to a room with a connection id, returning a YRoomMessage.
