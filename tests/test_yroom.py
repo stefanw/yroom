@@ -1,3 +1,7 @@
+import json
+
+import y_py as Y
+
 from yroom import YRoomManager
 
 
@@ -16,46 +20,12 @@ def test_connect():
 
 
 def test_connect_with_data():
-    update_data = bytes(
-        [
-            1,
-            3,
-            227,
-            214,
-            245,
-            198,
-            5,
-            0,
-            4,
-            1,
-            4,
-            116,
-            121,
-            112,
-            101,
-            1,
-            48,
-            68,
-            227,
-            214,
-            245,
-            198,
-            5,
-            0,
-            1,
-            49,
-            68,
-            227,
-            214,
-            245,
-            198,
-            5,
-            1,
-            1,
-            50,
-            0,
-        ]
-    )
+    d1 = Y.YDoc()
+    text = d1.get_text("test")
+    with d1.begin_transaction() as txn:
+        text.extend(txn, "hello world!")
+    update_data = Y.encode_state_as_update(d1)
+
     room_name = "test"
     manager = YRoomManager()
     message = manager.connect_with_data(room_name, 1, update_data)
@@ -93,3 +63,161 @@ def test_connect_multiple():
     assert manager.is_room_alive(room_name)
     manager.disconnect(room_name, conn_id_2)
     assert not manager.is_room_alive(room_name)
+
+
+def test_extraction():
+    d1 = Y.YDoc()
+    text = d1.get_text("text")
+    test_text = "hello world!"
+    array = d1.get_array("array")
+    test_array = [1, "foo", True]
+    map = d1.get_map("map")
+    test_map = {"a": 1}
+    xml_element = d1.get_xml_element("xml_element")
+    with d1.begin_transaction() as txn:
+        text.extend(txn, test_text)
+        array.extend(txn, test_array)
+        map.update(txn, test_map)
+
+        b = xml_element.push_xml_text(txn)
+        a = xml_element.insert_xml_element(txn, 0, "p")
+        aa = a.push_xml_text(txn)
+        aa.push(txn, "hello")
+        b.push(txn, "world")
+
+    update_data = Y.encode_state_as_update(d1)
+
+    room_name = "test"
+    manager = YRoomManager()
+    manager.connect_with_data(room_name, 1, update_data)
+    assert manager.get_text(room_name, "text") == test_text
+    assert json.loads(manager.get_array(room_name, "array")) == test_array
+    assert json.loads(manager.get_map(room_name, "map")) == test_map
+    assert (
+        manager.get_xml_element(room_name, "xml_element")
+        == "<UNDEFINED><p>hello</p>world</UNDEFINED>"
+    )
+
+
+def test_server_sync():
+    d1 = Y.YDoc()
+    text = d1.get_text("test")
+    with d1.begin_transaction() as txn:
+        text.extend(txn, "hello world!")
+
+    room_name = "test"
+    client_id = 1
+    manager = YRoomManager()
+    message = manager.connect(room_name, client_id)
+    initial_payload = b"".join(
+        [
+            b"\x00\x00",  # sync step 1
+            b"\x01"  # len message
+            b"\x00"  # zero length state vector
+            b"\x01",  # awareness
+            b"\x01",  # len of message
+            b"\00",  # no clients
+        ]
+    )
+    assert message.payload == initial_payload
+    with d1.begin_transaction() as txn:
+        diff = txn.diff_v1(None)
+
+    payload = b"".join(
+        [
+            b"\x00\x01",  # sync step 2
+            len(diff).to_bytes(1, "big"),  # len of diff
+            diff,  # the diff
+        ]
+    )
+    message = manager.handle_message(room_name, client_id, payload)
+    assert message.payload == b""
+    assert message.broadcast_payload == b""
+    assert manager.get_text(room_name, "test") == "hello world!"
+
+
+def test_server_no_sync_start():
+    empty = Y.YDoc()
+    d1 = Y.YDoc()
+    text = d1.get_text("test")
+    with d1.begin_transaction() as txn:
+        text.extend(txn, "hello world!")
+
+    room_name = "test"
+    client_id = 1
+    manager = YRoomManager({room_name: {"server_start_sync": False}})
+    message = manager.connect(room_name, client_id)
+    assert message.payload == b""
+    assert message.broadcast_payload == b""
+
+    state_vector = Y.encode_state_vector(d1)
+    sv_len = len(state_vector).to_bytes(1, "big")
+    client_sync_step1_payload = b"".join(
+        [
+            b"\x00\x00",  # sync step 1
+            sv_len,
+            state_vector,
+        ]
+    )
+    message = manager.handle_message(room_name, client_id, client_sync_step1_payload)
+
+    # Simulate empty document diff with d1
+    with empty.begin_transaction() as txn:
+        diff = txn.diff_v1(state_vector)
+    len_diff = len(diff).to_bytes(1, "big")
+
+    assert message.payload == b"".join(
+        [
+            b"\x00\x01",  # sync step 2
+            len_diff,  # len of buffer
+            diff,  # diffed update
+        ]
+    )
+    assert message.broadcast_payload == b""
+
+
+def test_client_prefix():
+    """TipTap HocusPocus Collaboration uses a prefix in protocol messages"""
+    d1 = Y.YDoc()
+    name = "test"
+    prefix = b"".join([len(name).to_bytes(1, "big"), name.encode("utf-8")])
+    text = d1.get_text(name)
+    with d1.begin_transaction() as txn:
+        text.extend(txn, "hello world!")
+
+    room_name = "test"
+    client_id = 1
+    manager = YRoomManager(
+        {
+            room_name: {
+                "server_start_sync": False,
+                "name_prefixed": True,
+            }
+        }
+    )
+    message = manager.connect(room_name, client_id)
+    assert message.payload == b""
+    assert message.broadcast_payload == b""
+
+    state_vector = Y.encode_state_vector(d1)
+    sv_len = len(state_vector).to_bytes(1, "big")
+    client_sync_step1_payload = b"".join(
+        [
+            prefix,
+            b"\x00\x00",  # sync step 1
+            sv_len,
+            state_vector,
+        ]
+    )
+
+    message = manager.handle_message(room_name, client_id, client_sync_step1_payload)
+    assert message.payload == b"".join(
+        [
+            prefix,
+            b"\x00\x01",  # sync step 2
+            b"\x02",  # len of buffer
+            b"\x00\x00",  # diffed update
+        ]
+    )
+
+    assert message.broadcast_payload == b""
