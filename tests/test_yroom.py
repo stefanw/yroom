@@ -112,11 +112,7 @@ def test_server_sync():
     initial_payload = b"".join(
         [
             b"\x00\x00",  # sync step 1
-            b"\x01"  # len message
-            b"\x00"  # zero length state vector
-            b"\x01",  # awareness
-            b"\x01",  # len of message
-            b"\00",  # no clients
+            b"\x01" b"\x00",  # len message  # zero length state vector
         ]
     )
     assert message.payload == initial_payload
