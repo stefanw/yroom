@@ -26,22 +26,22 @@ use yrs::{
 };
 
 #[derive(Clone, Default, Debug)]
-enum WireVersion {
+enum ProtocolVersion {
     #[default]
     V1,
     V2,
 }
 
 struct EncoderWrapper {
-    wire_version: WireVersion,
+    protocol_version: ProtocolVersion,
     messages: Vec<Message>,
     prefix: Option<String>,
 }
 
 impl EncoderWrapper {
-    fn new(wire_version: &WireVersion, prefix: Option<String>) -> Self {
+    fn new(protocol_version: &ProtocolVersion, prefix: Option<String>) -> Self {
         EncoderWrapper {
-            wire_version: wire_version.clone(),
+            protocol_version: protocol_version.clone(),
             messages: Vec::default(),
             prefix,
         }
@@ -50,8 +50,8 @@ impl EncoderWrapper {
         self.messages.push(message);
     }
     fn to_vec(&self) -> Vec<u8> {
-        match self.wire_version {
-            WireVersion::V1 => {
+        match self.protocol_version {
+            ProtocolVersion::V1 => {
                 if self.messages.is_empty() {
                     return Vec::new();
                 }
@@ -64,7 +64,7 @@ impl EncoderWrapper {
                 });
                 encoder.to_vec()
             }
-            WireVersion::V2 => {
+            ProtocolVersion::V2 => {
                 if self.messages.is_empty() {
                     return Vec::new();
                 }
@@ -82,7 +82,7 @@ impl EncoderWrapper {
 }
 
 struct DecoderWrapper<'a> {
-    wire_version: WireVersion,
+    protocol_version: ProtocolVersion,
     decoder_v1: Option<DecoderV1<'a>>,
     decoder_v2: Option<DecoderV2<'a>>,
     pub document_name: Option<String>,
@@ -90,31 +90,31 @@ struct DecoderWrapper<'a> {
 
 impl<'a> DecoderWrapper<'a> {
     fn new(
-        wire_version: &WireVersion,
+        protocol_version: &ProtocolVersion,
         cursor: Cursor<'a>,
-        name_prefixed: bool,
+        name_prefix: bool,
     ) -> Result<Self, lib0::error::Error> {
         let mut document_name = None;
-        match wire_version {
-            WireVersion::V1 => {
+        match protocol_version {
+            ProtocolVersion::V1 => {
                 let mut decoder = DecoderV1::new(cursor);
-                if name_prefixed {
+                if name_prefix {
                     document_name = Some(decoder.read_string()?.to_string());
                 }
                 Ok(DecoderWrapper {
-                    wire_version: wire_version.clone(),
+                    protocol_version: protocol_version.clone(),
                     decoder_v1: Some(decoder),
                     decoder_v2: None,
                     document_name,
                 })
             }
-            WireVersion::V2 => match DecoderV2::new(cursor) {
+            ProtocolVersion::V2 => match DecoderV2::new(cursor) {
                 Ok(mut decoder) => {
-                    if name_prefixed {
+                    if name_prefix {
                         document_name = Some(decoder.read_string()?.to_string());
                     }
                     Ok(DecoderWrapper {
-                        wire_version: wire_version.clone(),
+                        protocol_version: protocol_version.clone(),
                         decoder_v1: None,
                         decoder_v2: Some(decoder),
                         document_name,
@@ -129,18 +129,18 @@ impl<'a> DecoderWrapper<'a> {
 impl Iterator for DecoderWrapper<'_> {
     type Item = Result<Message, lib0::error::Error>;
     fn next(&mut self) -> Option<Self::Item> {
-        match self.wire_version {
-            WireVersion::V1 => MessageReader::new(self.decoder_v1.as_mut().unwrap()).next(),
-            WireVersion::V2 => MessageReader::new(self.decoder_v2.as_mut().unwrap()).next(),
+        match self.protocol_version {
+            ProtocolVersion::V1 => MessageReader::new(self.decoder_v1.as_mut().unwrap()).next(),
+            ProtocolVersion::V2 => MessageReader::new(self.decoder_v2.as_mut().unwrap()).next(),
         }
     }
 }
 
-impl From<u8> for WireVersion {
+impl From<u8> for ProtocolVersion {
     fn from(version: u8) -> Self {
         match version {
-            1 => WireVersion::V1,
-            2 => WireVersion::V2,
+            1 => ProtocolVersion::V1,
+            2 => ProtocolVersion::V2,
             // TODO: make this more graceful
             _ => panic!("Invalid encoder version"),
         }
@@ -149,16 +149,16 @@ impl From<u8> for WireVersion {
 
 #[derive(Clone, Debug)]
 struct YRoomSettings {
-    pub wire_version: WireVersion,
-    pub name_prefixed: bool,
+    pub protocol_version: ProtocolVersion,
+    pub name_prefix: bool,
     pub server_start_sync: bool,
 }
 
 impl Default for YRoomSettings {
     fn default() -> Self {
         YRoomSettings {
-            wire_version: WireVersion::V1,
-            name_prefixed: false,
+            protocol_version: ProtocolVersion::V1,
+            name_prefix: false,
             server_start_sync: true,
         }
     }
@@ -168,22 +168,22 @@ impl FromPyObject<'_> for YRoomSettings {
     fn extract(ob: &PyAny) -> PyResult<Self> {
         let settings = ob.downcast::<PyDict>()?;
 
-        let wire_version: WireVersion = match settings.get_item("wire_version") {
-            Some(wire_version) => wire_version.extract::<u8>()?.into(),
-            None => WireVersion::V1,
+        let protocol_version: ProtocolVersion = match settings.get_item("PROTOCOL_VERSION") {
+            Some(protocol_version) => protocol_version.extract::<u8>()?.into(),
+            None => ProtocolVersion::V1,
         };
-        let name_prefixed = match settings.get_item("name_prefixed") {
-            Some(name_prefixed) => name_prefixed.extract::<bool>()?,
+        let name_prefix = match settings.get_item("PROTOCOL_NAME_PREFIX") {
+            Some(name_prefix) => name_prefix.extract::<bool>()?,
             None => false,
         };
-        let server_start_sync = match settings.get_item("server_start_sync") {
+        let server_start_sync = match settings.get_item("SERVER_START_SYNC") {
             Some(server_start_sync) => server_start_sync.extract::<bool>()?,
             None => true,
         };
 
         Ok(YRoomSettings {
-            wire_version,
-            name_prefixed,
+            protocol_version,
+            name_prefix,
             server_start_sync,
         })
     }
@@ -455,7 +455,7 @@ impl YRoom {
             .entry(conn_id)
             .or_insert_with(HashSet::new);
 
-        let mut encoder = EncoderWrapper::new(&self.settings.wire_version, None);
+        let mut encoder = EncoderWrapper::new(&self.settings.protocol_version, None);
 
         if self.settings.server_start_sync {
             let sv = self.awareness.doc().transact().state_vector();
@@ -477,9 +477,9 @@ impl YRoom {
         log::debug!("message: {:?}", payload);
         let cursor = Cursor::new(&payload);
         let decoder = match DecoderWrapper::new(
-            &self.settings.wire_version,
+            &self.settings.protocol_version,
             cursor,
-            self.settings.name_prefixed,
+            self.settings.name_prefix,
         ) {
             Ok(decoder) => decoder,
             Err(e) => {
@@ -492,18 +492,22 @@ impl YRoom {
             }
         };
 
-        let mut sync_encoder =
-            EncoderWrapper::new(&self.settings.wire_version, decoder.document_name.clone());
-        let mut update_encoder =
-            EncoderWrapper::new(&self.settings.wire_version, decoder.document_name.clone());
+        let mut sync_encoder = EncoderWrapper::new(
+            &self.settings.protocol_version,
+            decoder.document_name.clone(),
+        );
+        let mut update_encoder = EncoderWrapper::new(
+            &self.settings.protocol_version,
+            decoder.document_name.clone(),
+        );
 
         decoder.for_each(|message_result| match message_result {
             Ok(message) => match message {
                 Message::Sync(SyncMessage::SyncStep1(sv)) => {
                     let txn = self.awareness.doc_mut().transact_mut();
-                    let data = match self.settings.wire_version {
-                        WireVersion::V1 => txn.encode_diff_v1(&sv),
-                        WireVersion::V2 => {
+                    let data = match self.settings.protocol_version {
+                        ProtocolVersion::V1 => txn.encode_diff_v1(&sv),
+                        ProtocolVersion::V2 => {
                             let mut enc = EncoderV2::new();
                             txn.encode_diff(&sv, &mut enc);
                             enc.to_vec()
@@ -514,9 +518,9 @@ impl YRoom {
                     sync_encoder.push(message);
                 }
                 Message::Sync(SyncMessage::SyncStep2(data)) => {
-                    let update = match self.settings.wire_version {
-                        WireVersion::V1 => Update::decode_v1(&data),
-                        WireVersion::V2 => Update::decode_v2(&data),
+                    let update = match self.settings.protocol_version {
+                        ProtocolVersion::V1 => Update::decode_v1(&data),
+                        ProtocolVersion::V2 => Update::decode_v2(&data),
                     };
                     match update {
                         Ok(update) => {
@@ -603,7 +607,7 @@ impl YRoom {
             connections.remove(&conn_id);
         }
         // FIXME: Can't give possibly necessary name prefix on disconnect
-        let mut encoder = EncoderWrapper::new(&self.settings.wire_version, None);
+        let mut encoder = EncoderWrapper::new(&self.settings.protocol_version, None);
         if let Ok(awareness_update) = self.awareness.update() {
             encoder.push(Message::Awareness(awareness_update));
         }
@@ -612,9 +616,9 @@ impl YRoom {
 
     pub fn serialize(&self) -> Vec<u8> {
         let txn = self.awareness.doc().transact();
-        match self.settings.wire_version {
-            WireVersion::V1 => txn.encode_state_as_update_v1(&StateVector::default()),
-            WireVersion::V2 => txn.encode_state_as_update_v2(&StateVector::default()),
+        match self.settings.protocol_version {
+            ProtocolVersion::V1 => txn.encode_state_as_update_v1(&StateVector::default()),
+            ProtocolVersion::V2 => txn.encode_state_as_update_v2(&StateVector::default()),
         }
     }
 

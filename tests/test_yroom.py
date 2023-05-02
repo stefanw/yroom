@@ -141,7 +141,7 @@ def test_server_no_sync_start():
 
     room_name = "test"
     client_id = 1
-    manager = YRoomManager({room_name: {"server_start_sync": False}})
+    manager = YRoomManager({room_name: {"SERVER_START_SYNC": False}})
     message = manager.connect(room_name, client_id)
     assert message.payload == b""
     assert message.broadcast_payload == b""
@@ -186,8 +186,8 @@ def test_client_prefix():
     manager = YRoomManager(
         {
             room_name: {
-                "server_start_sync": False,
-                "name_prefixed": True,
+                "SERVER_START_SYNC": False,
+                "PROTOCOL_NAME_PREFIX": True,
             }
         }
     )
