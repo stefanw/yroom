@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "yroom"
-version = "0.0.4"
+version = "0.0.5"
 requires-python = ">=3.7"
 description = "Yjs sync and awareness protocol handler for a non-editing client (e.g. server)"
 authors = [
