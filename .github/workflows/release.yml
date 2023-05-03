@@ -3,6 +3,7 @@
 #
 #    maturin generate-ci github
 #
+name: Release
 on:
   push:
     tags:
