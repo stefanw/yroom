@@ -90,11 +90,11 @@ def test_extraction():
     room_name = "test"
     manager = YRoomManager()
     manager.connect_with_data(room_name, 1, update_data)
-    assert manager.get_text(room_name, "text") == test_text
-    assert json.loads(manager.get_array(room_name, "array")) == test_array
-    assert json.loads(manager.get_map(room_name, "map")) == test_map
+    assert manager.export_text(room_name, "text") == test_text
+    assert json.loads(manager.export_array(room_name, "array")) == test_array
+    assert json.loads(manager.export_map(room_name, "map")) == test_map
     assert (
-        manager.get_xml_element(room_name, "xml_element")
+        manager.export_xml_element(room_name, "xml_element")
         == "<UNDEFINED><p>hello</p>world</UNDEFINED>"
     )
 
@@ -129,7 +129,7 @@ def test_server_sync():
     message = manager.handle_message(room_name, client_id, payload)
     assert message.payload == b""
     assert message.broadcast_payload == b""
-    assert manager.get_text(room_name, "test") == "hello world!"
+    assert manager.export_text(room_name, "test") == "hello world!"
 
 
 def test_server_no_sync_start():

@@ -335,7 +335,7 @@ impl YRoomManager {
         self.rooms.keys().cloned().collect()
     }
 
-    pub fn get_map(&self, room: String, name: String) -> PyObject {
+    pub fn export_map(&self, room: String, name: String) -> PyObject {
         let yroom = self.rooms.get(&room);
         match yroom {
             Some(room) => {
@@ -350,7 +350,7 @@ impl YRoomManager {
         }
     }
 
-    pub fn get_array(&self, room: String, name: String) -> PyObject {
+    pub fn export_array(&self, room: String, name: String) -> PyObject {
         let yroom = self.rooms.get(&room);
         match yroom {
             Some(room) => {
@@ -365,7 +365,7 @@ impl YRoomManager {
         }
     }
 
-    pub fn get_text(&self, room: String, name: String) -> PyObject {
+    pub fn export_text(&self, room: String, name: String) -> PyObject {
         let yroom = self.rooms.get(&room);
         match yroom {
             Some(room) => {
@@ -379,7 +379,7 @@ impl YRoomManager {
         }
     }
 
-    pub fn get_xml_element(&self, room: String, name: String) -> PyObject {
+    pub fn export_xml_element(&self, room: String, name: String) -> PyObject {
         let yroom = self.rooms.get(&room);
         match yroom {
             Some(room) => {
@@ -393,7 +393,7 @@ impl YRoomManager {
         }
     }
 
-    pub fn get_xml_text(&self, room: String, name: String) -> PyObject {
+    pub fn export_xml_text(&self, room: String, name: String) -> PyObject {
         let yroom = self.rooms.get(&room);
         match yroom {
             Some(room) => {
@@ -407,7 +407,7 @@ impl YRoomManager {
         }
     }
 
-    pub fn get_xml_fragment(&self, room: String, name: String) -> PyObject {
+    pub fn export_xml_fragment(&self, room: String, name: String) -> PyObject {
         let yroom = self.rooms.get(&room);
         match yroom {
             Some(room) => {
