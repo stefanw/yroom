@@ -9,8 +9,8 @@ def test_connect():
     room_name = "test"
     manager = YRoomManager()
     message = manager.connect(room_name, 1)
-    assert len(message.payload) > 0
-    assert len(message.broadcast_payload) == 0
+    assert len(message.payloads) > 0
+    assert len(message.broadcast_payloads) == 0
     assert manager.has_room(room_name)
     assert manager.is_room_alive(room_name)
     assert manager.list_rooms() == [room_name]
@@ -29,8 +29,9 @@ def test_connect_with_data():
     room_name = "test"
     manager = YRoomManager()
     message = manager.connect_with_data(room_name, 1, update_data)
-    assert len(message.payload) > 0
-    assert len(message.broadcast_payload) == 0
+    assert len(message.payloads) > 0
+    assert len(message.payloads) > 0
+    assert len(message.broadcast_payloads) == 0
     assert manager.serialize_room(room_name) == update_data
 
 
@@ -42,8 +43,8 @@ def test_disconnect():
     assert manager.has_room(room_name)
     assert manager.is_room_alive(room_name)
     message = manager.disconnect(room_name, conn_id)
-    assert len(message.payload) == 0
-    assert len(message.broadcast_payload) > 0
+    assert len(message.payloads) == 0
+    assert len(message.broadcast_payloads) > 0
     assert not manager.is_room_alive(room_name)
     assert manager.list_rooms() == [room_name]
     manager.remove_room(room_name)
@@ -115,7 +116,7 @@ def test_server_sync():
             b"\x01" b"\x00",  # len message  # zero length state vector
         ]
     )
-    assert message.payload == initial_payload
+    assert message.payloads == [initial_payload]
     with d1.begin_transaction() as txn:
         diff = txn.diff_v1(None)
 
@@ -127,8 +128,8 @@ def test_server_sync():
         ]
     )
     message = manager.handle_message(room_name, client_id, payload)
-    assert message.payload == b""
-    assert message.broadcast_payload == b""
+    assert message.payloads == []
+    assert message.broadcast_payloads == []
     assert manager.export_text(room_name, "test") == "hello world!"
 
 
@@ -143,8 +144,8 @@ def test_server_no_sync_start():
     client_id = 1
     manager = YRoomManager({room_name: {"SERVER_START_SYNC": False}})
     message = manager.connect(room_name, client_id)
-    assert message.payload == b""
-    assert message.broadcast_payload == b""
+    assert message.payloads == []
+    assert message.broadcast_payloads == []
 
     state_vector = Y.encode_state_vector(d1)
     sv_len = len(state_vector).to_bytes(1, "big")
@@ -162,14 +163,16 @@ def test_server_no_sync_start():
         diff = txn.diff_v1(state_vector)
     len_diff = len(diff).to_bytes(1, "big")
 
-    assert message.payload == b"".join(
-        [
-            b"\x00\x01",  # sync step 2
-            len_diff,  # len of buffer
-            diff,  # diffed update
-        ]
-    )
-    assert message.broadcast_payload == b""
+    assert message.payloads == [
+        b"".join(
+            [
+                b"\x00\x01",  # sync step 2
+                len_diff,  # len of buffer
+                diff,  # diffed update
+            ]
+        )
+    ]
+    assert message.broadcast_payloads == []
 
 
 def test_client_prefix():
@@ -192,8 +195,8 @@ def test_client_prefix():
         }
     )
     message = manager.connect(room_name, client_id)
-    assert message.payload == b""
-    assert message.broadcast_payload == b""
+    assert message.payloads == []
+    assert message.broadcast_payloads == []
 
     state_vector = Y.encode_state_vector(d1)
     sv_len = len(state_vector).to_bytes(1, "big")
@@ -207,13 +210,15 @@ def test_client_prefix():
     )
 
     message = manager.handle_message(room_name, client_id, client_sync_step1_payload)
-    assert message.payload == b"".join(
-        [
-            prefix,
-            b"\x00\x01",  # sync step 2
-            b"\x02",  # len of buffer
-            b"\x00\x00",  # diffed update
-        ]
-    )
+    assert message.payloads == [
+        b"".join(
+            [
+                prefix,
+                b"\x00\x01",  # sync step 2
+                b"\x02",  # len of buffer
+                b"\x00\x00",  # diffed update
+            ]
+        )
+    ]
 
-    assert message.broadcast_payload == b""
+    assert message.broadcast_payloads == []

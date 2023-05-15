@@ -8,8 +8,8 @@ class YRoomMessage:
     Either or both of the members can be of zero length and then must not be sent.
     """
 
-    payload: bytes
-    broadcast_payload: bytes
+    payloads: List[bytes]
+    broadcast_payloads: List[bytes]
 
 class YRoomSettings(TypedDict):
     wire_version: int  # The Yjs encoding/decoding version to use (1 or 2, default: 1)

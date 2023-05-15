@@ -5,7 +5,7 @@ use std::{
 
 use pyo3::{
     prelude::*,
-    types::{PyBytes, PyDict},
+    types::{PyBytes, PyDict, PyList},
 };
 
 use lib0::{
@@ -36,25 +36,44 @@ struct EncoderWrapper {
     protocol_version: ProtocolVersion,
     messages: Vec<Message>,
     prefix: Option<String>,
+    disable_pipelining: bool,
 }
 
 impl EncoderWrapper {
-    fn new(protocol_version: &ProtocolVersion, prefix: Option<String>) -> Self {
+    fn new(
+        protocol_version: &ProtocolVersion,
+        disable_pipelining: bool,
+        prefix: Option<String>,
+    ) -> Self {
         EncoderWrapper {
             protocol_version: protocol_version.clone(),
             messages: Vec::default(),
             prefix,
+            disable_pipelining,
         }
     }
     fn push(&mut self, message: Message) {
         self.messages.push(message);
     }
-    fn to_vec(&self) -> Vec<u8> {
+    fn to_vecs(&self) -> Vec<Vec<u8>> {
         match self.protocol_version {
             ProtocolVersion::V1 => {
                 if self.messages.is_empty() {
                     return Vec::new();
                 }
+                if self.disable_pipelining {
+                    self.messages
+                        .iter()
+                        .map(|message| {
+                            let mut encoder = EncoderV1::new();
+                            if let Some(prefix) = &self.prefix {
+                                encoder.write_string(prefix);
+                            }
+                            message.encode(&mut encoder);
+                            encoder.to_vec()
+                        })
+                        .collect()
+                } else {
                 let mut encoder = EncoderV1::new();
                 if let Some(prefix) = &self.prefix {
                     encoder.write_string(prefix);
@@ -62,12 +81,26 @@ impl EncoderWrapper {
                 self.messages.iter().for_each(|message| {
                     message.encode(&mut encoder);
                 });
-                encoder.to_vec()
+                    vec![encoder.to_vec()]
+                }
             }
             ProtocolVersion::V2 => {
                 if self.messages.is_empty() {
                     return Vec::new();
                 }
+                if self.disable_pipelining {
+                    self.messages
+                        .iter()
+                        .map(|message| {
+                            let mut encoder = EncoderV2::new();
+                            if let Some(prefix) = &self.prefix {
+                                encoder.write_string(prefix);
+                            }
+                            message.encode(&mut encoder);
+                            encoder.to_vec()
+                        })
+                        .collect()
+                } else {
                 let mut encoder = EncoderV2::new();
                 if let Some(prefix) = &self.prefix {
                     encoder.write_string(prefix);
@@ -75,7 +108,8 @@ impl EncoderWrapper {
                 self.messages.iter().for_each(|message| {
                     message.encode(&mut encoder);
                 });
-                encoder.to_vec()
+                    vec![encoder.to_vec()]
+                }
             }
         }
     }
@@ -152,6 +186,7 @@ struct YRoomSettings {
     pub protocol_version: ProtocolVersion,
     pub name_prefix: bool,
     pub server_start_sync: bool,
+    pub disable_pipelining: bool,
 }
 
 impl Default for YRoomSettings {
@@ -160,6 +195,7 @@ impl Default for YRoomSettings {
             protocol_version: ProtocolVersion::V1,
             name_prefix: false,
             server_start_sync: true,
+            disable_pipelining: false,
         }
     }
 }
@@ -180,11 +216,15 @@ impl FromPyObject<'_> for YRoomSettings {
             Some(server_start_sync) => server_start_sync.extract::<bool>()?,
             None => true,
         };
-
+        let disable_pipelining = match settings.get_item("PROTOCOL_DISABLE_PIPELINING") {
+            Some(disable_pipelining) => disable_pipelining.extract::<bool>()?,
+            None => false,
+        };
         Ok(YRoomSettings {
             protocol_version,
             name_prefix,
             server_start_sync,
+            disable_pipelining,
         })
     }
 }
@@ -192,17 +232,36 @@ impl FromPyObject<'_> for YRoomSettings {
 #[pyclass]
 pub struct YRoomMessage {
     #[pyo3(get)]
-    pub payload: PyObject,
+    pub payloads: PyObject,
     #[pyo3(get)]
-    pub broadcast_payload: PyObject,
+    pub broadcast_payloads: PyObject,
+}
+
+fn make_payloads(py: Python, payloads: &[Vec<u8>]) -> PyObject {
+    PyList::new(py, payloads.iter().map(|payload| PyBytes::new(py, payload))).into()
+}
+
+impl YRoomMessage {
+    fn from_payloads(payloads: &[Vec<u8>], broadcast_payloads: &[Vec<u8>]) -> YRoomMessage {
+        Python::with_gil(|py| YRoomMessage {
+            payloads: make_payloads(py, payloads),
+            broadcast_payloads: make_payloads(py, broadcast_payloads),
+        })
+    }
+}
+
+impl Default for YRoomMessage {
+    fn default() -> Self {
+        YRoomMessage::from_payloads(&[], &[])
+    }
 }
 
 #[pymethods]
 impl YRoomMessage {
     pub fn __str__(&self) -> String {
         format!(
-            "YRoomMessage(payload: {}, broadcast_payload: {})",
-            self.payload, self.broadcast_payload
+            "YRoomMessage(payloads: {}, broadcast_payloads: {})",
+            self.payloads, self.broadcast_payloads
         )
     }
 
@@ -301,10 +360,7 @@ impl YRoomManager {
 
     pub fn disconnect(&mut self, room: String, conn_id: u64) -> YRoomMessage {
         let broadcast_payload = self.get_room(&room).disconnect(conn_id);
-        Python::with_gil(|py| YRoomMessage {
-            payload: PyBytes::new(py, &[]).into(),
-            broadcast_payload: PyBytes::new(py, &broadcast_payload).into(),
-        })
+        YRoomMessage::from_payloads(&[], &broadcast_payload)
     }
 
     pub fn has_room(&self, room: String) -> bool {
@@ -455,7 +511,11 @@ impl YRoom {
             .entry(conn_id)
             .or_insert_with(HashSet::new);
 
-        let mut encoder = EncoderWrapper::new(&self.settings.protocol_version, None);
+        let mut encoder = EncoderWrapper::new(
+            &self.settings.protocol_version,
+            self.settings.disable_pipelining,
+            None,
+        );
 
         if self.settings.server_start_sync {
             let sv = self.awareness.doc().transact().state_vector();
@@ -465,11 +525,10 @@ impl YRoom {
                     encoder.push(Message::Awareness(awareness_update));
                 }
             }
-        }
-        let payload = encoder.to_vec();
+        let payloads = encoder.to_vecs();
         Python::with_gil(|py| YRoomMessage {
-            payload: PyBytes::new(py, &payload).into(),
-            broadcast_payload: PyBytes::new(py, &[]).into(),
+            payloads: make_payloads(py, &payloads),
+            broadcast_payloads: make_payloads(py, &[]),
         })
     }
 
@@ -485,19 +544,18 @@ impl YRoom {
             Err(e) => {
                 log::error!("Error decoding message: {}", e);
                 // TODO: return error message
-                return Python::with_gil(|py| YRoomMessage {
-                    payload: PyBytes::new(py, &[]).into(),
-                    broadcast_payload: PyBytes::new(py, &[]).into(),
-                });
+                return YRoomMessage::default();
             }
         };
 
         let mut sync_encoder = EncoderWrapper::new(
             &self.settings.protocol_version,
+            self.settings.disable_pipelining,
             decoder.document_name.clone(),
         );
         let mut update_encoder = EncoderWrapper::new(
             &self.settings.protocol_version,
+            self.settings.disable_pipelining,
             decoder.document_name.clone(),
         );
 
@@ -588,14 +646,10 @@ impl YRoom {
                 log::warn!("Bad message from connection {}: {:?}", conn_id, err);
             }
         });
-
-        Python::with_gil(|py| YRoomMessage {
-            payload: PyBytes::new(py, &sync_encoder.to_vec()).into(),
-            broadcast_payload: PyBytes::new(py, &update_encoder.to_vec()).into(),
-        })
+        YRoomMessage::from_payloads(&sync_encoder.to_vecs(), &update_encoder.to_vecs())
     }
 
-    pub fn disconnect(&mut self, conn_id: u64) -> Vec<u8> {
+    pub fn disconnect(&mut self, conn_id: u64) -> Vec<Vec<u8>> {
         {
             let mut connections = self.connections.lock().unwrap();
             let client_ids = connections.get(&conn_id);
@@ -606,12 +660,22 @@ impl YRoom {
             }
             connections.remove(&conn_id);
         }
-        // FIXME: Can't give possibly necessary name prefix on disconnect
-        let mut encoder = EncoderWrapper::new(&self.settings.protocol_version, None);
+        // Can't broadcast disconnect for name prefixed protocol
+        // as name prefix is not present on disconnect
+        // but that's OK as name prefixed protocol client usually
+        // sends final awareness update before disconnect
+        if self.settings.name_prefix {
+            return vec![];
+        }
+        let mut encoder = EncoderWrapper::new(
+            &self.settings.protocol_version,
+            self.settings.disable_pipelining,
+            None,
+        );
         if let Ok(awareness_update) = self.awareness.update() {
             encoder.push(Message::Awareness(awareness_update));
         }
-        encoder.to_vec()
+        encoder.to_vecs()
     }
 
     pub fn serialize(&self) -> Vec<u8> {
