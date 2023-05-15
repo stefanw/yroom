@@ -74,13 +74,13 @@ impl EncoderWrapper {
                         })
                         .collect()
                 } else {
-                let mut encoder = EncoderV1::new();
-                if let Some(prefix) = &self.prefix {
-                    encoder.write_string(prefix);
-                }
-                self.messages.iter().for_each(|message| {
-                    message.encode(&mut encoder);
-                });
+                    let mut encoder = EncoderV1::new();
+                    if let Some(prefix) = &self.prefix {
+                        encoder.write_string(prefix);
+                    }
+                    self.messages.iter().for_each(|message| {
+                        message.encode(&mut encoder);
+                    });
                     vec![encoder.to_vec()]
                 }
             }
@@ -101,13 +101,13 @@ impl EncoderWrapper {
                         })
                         .collect()
                 } else {
-                let mut encoder = EncoderV2::new();
-                if let Some(prefix) = &self.prefix {
-                    encoder.write_string(prefix);
-                }
-                self.messages.iter().for_each(|message| {
-                    message.encode(&mut encoder);
-                });
+                    let mut encoder = EncoderV2::new();
+                    if let Some(prefix) = &self.prefix {
+                        encoder.write_string(prefix);
+                    }
+                    self.messages.iter().for_each(|message| {
+                        message.encode(&mut encoder);
+                    });
                     vec![encoder.to_vec()]
                 }
             }
@@ -504,6 +504,16 @@ impl YRoom {
         }
     }
 
+    fn write_start_sync(&self, encoder: &mut EncoderWrapper) {
+        let sv = self.awareness.doc().transact().state_vector();
+        encoder.push(Message::Sync(SyncMessage::SyncStep1(sv)));
+        if !self.awareness.clients().is_empty() {
+            if let Ok(awareness_update) = self.awareness.update() {
+                encoder.push(Message::Awareness(awareness_update));
+            }
+        }
+    }
+
     fn connect(&mut self, conn_id: u64) -> YRoomMessage {
         let connections = self.connections.lock();
         connections
@@ -518,13 +528,8 @@ impl YRoom {
         );
 
         if self.settings.server_start_sync {
-            let sv = self.awareness.doc().transact().state_vector();
-            encoder.push(Message::Sync(SyncMessage::SyncStep1(sv)));
-            if !self.awareness.clients().is_empty() {
-                if let Ok(awareness_update) = self.awareness.update() {
-                    encoder.push(Message::Awareness(awareness_update));
-                }
-            }
+            self.write_start_sync(&mut encoder);
+        }
         let payloads = encoder.to_vecs();
         Python::with_gil(|py| YRoomMessage {
             payloads: make_payloads(py, &payloads),
@@ -562,18 +567,24 @@ impl YRoom {
         decoder.for_each(|message_result| match message_result {
             Ok(message) => match message {
                 Message::Sync(SyncMessage::SyncStep1(sv)) => {
-                    let txn = self.awareness.doc_mut().transact_mut();
-                    let data = match self.settings.protocol_version {
-                        ProtocolVersion::V1 => txn.encode_diff_v1(&sv),
-                        ProtocolVersion::V2 => {
-                            let mut enc = EncoderV2::new();
-                            txn.encode_diff(&sv, &mut enc);
-                            enc.to_vec()
+                    let data = {
+                        let txn = self.awareness.doc_mut().transact_mut();
+                        match self.settings.protocol_version {
+                            ProtocolVersion::V1 => txn.encode_diff_v1(&sv),
+                            ProtocolVersion::V2 => {
+                                let mut enc = EncoderV2::new();
+                                txn.encode_diff(&sv, &mut enc);
+                                enc.to_vec()
+                            }
                         }
                     };
                     log::trace!("yroom sync message: {:?}", data);
                     let message = Message::Sync(SyncMessage::SyncStep2(data));
                     sync_encoder.push(message);
+                    // Send sync step 1 to client when server has not started sync yet
+                    if self.settings.server_start_sync {
+                        self.write_start_sync(&mut sync_encoder);
+                    }
                 }
                 Message::Sync(SyncMessage::SyncStep2(data)) => {
                     let update = match self.settings.protocol_version {
