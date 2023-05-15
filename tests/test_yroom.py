@@ -163,21 +163,31 @@ def test_server_no_sync_start():
         diff = txn.diff_v1(state_vector)
     len_diff = len(diff).to_bytes(1, "big")
 
+    empty_sv = Y.encode_state_vector(empty)
+    empty_sv_len = len(empty_sv).to_bytes(1, "big")
+
     assert message.payloads == [
         b"".join(
             [
                 b"\x00\x01",  # sync step 2
                 len_diff,  # len of buffer
                 diff,  # diffed update
+                b"\x00\x00",  # sync step 1
+                empty_sv_len,
+                empty_sv,
             ]
         )
     ]
     assert message.broadcast_payloads == []
 
 
-def test_client_prefix():
-    """TipTap HocusPocus Collaboration uses a prefix in protocol messages"""
+def test_client_prefix_no_pipeline():
+    """
+    TipTap HocusPocus Collaboration uses a prefix in protocol messages
+    and does not support pipelining.
+    """
     d1 = Y.YDoc()
+    empty = Y.YDoc()
     name = "test"
     prefix = b"".join([len(name).to_bytes(1, "big"), name.encode("utf-8")])
     text = d1.get_text(name)
@@ -191,6 +201,7 @@ def test_client_prefix():
             room_name: {
                 "SERVER_START_SYNC": False,
                 "PROTOCOL_NAME_PREFIX": True,
+                "PROTOCOL_DISABLE_PIPELINING": True,
             }
         }
     )
@@ -209,6 +220,9 @@ def test_client_prefix():
         ]
     )
 
+    empty_sv = Y.encode_state_vector(empty)
+    empty_sv_len = len(empty_sv).to_bytes(1, "big")
+
     message = manager.handle_message(room_name, client_id, client_sync_step1_payload)
     assert message.payloads == [
         b"".join(
@@ -218,7 +232,15 @@ def test_client_prefix():
                 b"\x02",  # len of buffer
                 b"\x00\x00",  # diffed update
             ]
-        )
+        ),
+        b"".join(
+            [
+                prefix,
+                b"\x00\x00",  # sync step 1
+                empty_sv_len,
+                empty_sv,
+            ]
+        ),
     ]
 
     assert message.broadcast_payloads == []

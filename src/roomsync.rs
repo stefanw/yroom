@@ -582,7 +582,7 @@ impl YRoom {
                     let message = Message::Sync(SyncMessage::SyncStep2(data));
                     sync_encoder.push(message);
                     // Send sync step 1 to client when server has not started sync yet
-                    if self.settings.server_start_sync {
+                    if !self.settings.server_start_sync {
                         self.write_start_sync(&mut sync_encoder);
                     }
                 }
