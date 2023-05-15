@@ -533,7 +533,7 @@ impl YRoom {
     }
 
     pub fn handle_message(&mut self, conn_id: u64, payload: Vec<u8>) -> YRoomMessage {
-        log::debug!("message: {:?}", payload);
+        log::trace!("yroom handle_message: {:?}", payload);
         let cursor = Cursor::new(&payload);
         let decoder = match DecoderWrapper::new(
             &self.settings.protocol_version,
@@ -571,7 +571,7 @@ impl YRoom {
                             enc.to_vec()
                         }
                     };
-                    log::debug!("message: {:?}", data);
+                    log::trace!("yroom sync message: {:?}", data);
                     let message = Message::Sync(SyncMessage::SyncStep2(data));
                     sync_encoder.push(message);
                 }
